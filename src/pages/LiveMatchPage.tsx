@@ -4,29 +4,46 @@ import { Activity, ShieldAlert, Zap, Timer, Trophy, ChevronRight, RefreshCw } fr
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
 import { useAuthStore } from '../store/useAuthStore';
 import { useLive } from '../hooks/useLive';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 
 function ChatInput({ liveMatchId, onNewMessage }: { liveMatchId: string; onNewMessage: (m: any) => void }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const { user } = useAuthStore();
 
   const send = async (e?: any) => {
     if (e) e.preventDefault();
     if (!text || sending) return;
     setSending(true);
-    const userMsg = { role: 'user', text };
+    const userMsg = { role: 'user', text, user: { uid: user?.uid, displayName: user?.displayName || user?.email || 'Me', photoURL: user?.photoURL || null }, createdAt: serverTimestamp() };
     onNewMessage(userMsg);
 
     try {
+      // persist the user message to Firestore
+      try {
+        const col = collection(db, 'matches', liveMatchId, 'chat');
+        await addDoc(col, userMsg as any);
+      } catch (e) {
+        console.debug('Failed to persist user message', e);
+      }
+
       const res = await fetch('/api/coach', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, context: { matchId: liveMatchId } })
       });
       const data = await res.json();
-      const aiMsg = data?.structured || data?.message || data || { role: 'assistant', text: 'No reply' };
-      onNewMessage(aiMsg);
+      const aiMsgRaw = data?.structured || data?.message || data || { role: 'assistant', text: 'No reply' };
+      const aiMsg = { role: 'assistant', text: aiMsgRaw?.text || aiMsgRaw?.message || JSON.stringify(aiMsgRaw), createdAt: serverTimestamp(), ai: true };
+      // persist AI reply
+      try {
+        const col = collection(db, 'matches', liveMatchId, 'chat');
+        await addDoc(col, aiMsg as any);
+      } catch (e) {
+        console.debug('Failed to persist AI message', e);
+        onNewMessage(aiMsg);
+      }
     } catch (err) {
       onNewMessage({ role: 'assistant', text: 'Failed to reach coach. Try again.' });
     } finally {
@@ -70,6 +87,27 @@ export default function LiveMatchPage() {
       if (el) el.scrollTop = 0;
     } catch (e) {}
   }, [aiMessages.length]);
+
+  // Sync chat from Firestore for this match (newest first)
+  useEffect(() => {
+    if (!liveMatchId) return;
+    try {
+      const col = collection(db, 'matches', liveMatchId, 'chat');
+      const q = query(col, orderBy('createdAt', 'desc'), limit(50));
+      const unsub = onSnapshot(q, (snap) => {
+        const msgs: any[] = [];
+        snap.forEach((d) => {
+          msgs.push({ id: d.id, ...(d.data() as any) });
+        });
+        setAiMessages(msgs);
+      }, (err) => {
+        console.debug('Chat snapshot error', err);
+      });
+      return () => unsub();
+    } catch (e) {
+      console.debug('Failed to sync chat from Firestore', e);
+    }
+  }, [liveMatchId]);
 
   useEffect(() => {
     let interval: any;
@@ -658,10 +696,28 @@ export default function LiveMatchPage() {
               {aiMessages.map((m, idx) => {
                 const text = m?.text || m?.message || m?.content || (typeof m === 'string' ? m : JSON.stringify(m));
                 const who = m?.role || m?.source || m?.who || 'AI';
+                const name = m?.user?.displayName || (m.ai ? 'Coach' : who || 'AI');
+                const photo = m?.user?.photoURL || (m.ai ? null : null);
+                let date: Date | null = null;
+                try {
+                  if (m?.createdAt?.toDate) date = m.createdAt.toDate();
+                  else if (typeof m?.createdAt === 'number') date = new Date(m.createdAt);
+                  else if (m?.createdAt) date = new Date(m.createdAt);
+                } catch (e) { date = null; }
+                const timeStr = date ? date.toLocaleTimeString() : '';
+
                 return (
-                  <div key={idx} className="p-2 rounded-lg bg-black/20 border border-white/5">
-                    <div className="text-[11px] text-gray-400 font-mono mb-1">{who}</div>
-                    <div className="text-sm text-gray-100">{text}</div>
+                  <div key={m.id || idx} className="flex gap-3 p-2 rounded-lg bg-black/10 border border-white/5">
+                    <div className="w-8 h-8 rounded-full bg-[#0B2E26] flex items-center justify-center text-sm overflow-hidden">
+                      {photo ? <img src={photo} alt={name} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : <span className="text-xs font-bold">{(name || 'AI').slice(0,2).toUpperCase()}</span>}
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-baseline justify-between">
+                        <div className="text-[11px] text-gray-400 font-mono">{name}</div>
+                        <div className="text-[10px] text-gray-500">{timeStr}</div>
+                      </div>
+                      <div className="text-sm text-gray-100 mt-1">{text}</div>
+                    </div>
                   </div>
                 );
               })}
