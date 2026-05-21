@@ -35,7 +35,6 @@ Powered by **Gemini AI + Real-Time Event Intelligence**
 
 # 🎥 Demo
 
-> Add your GIF or screenshots here (HIGHLY RECOMMENDED)
 
 <p align="center">
   <img src="./public/demo.gif" width="100%" />
