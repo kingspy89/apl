@@ -7,6 +7,44 @@ import { useLive } from '../hooks/useLive';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 
+function ChatInput({ liveMatchId, onNewMessage }: { liveMatchId: string; onNewMessage: (m: any) => void }) {
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const send = async (e?: any) => {
+    if (e) e.preventDefault();
+    if (!text || sending) return;
+    setSending(true);
+    const userMsg = { role: 'user', text };
+    onNewMessage(userMsg);
+
+    try {
+      const res = await fetch('/api/coach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, context: { matchId: liveMatchId } })
+      });
+      const data = await res.json();
+      const aiMsg = data?.structured || data?.message || data || { role: 'assistant', text: 'No reply' };
+      onNewMessage(aiMsg);
+    } catch (err) {
+      onNewMessage({ role: 'assistant', text: 'Failed to reach coach. Try again.' });
+    } finally {
+      setText('');
+      setSending(false);
+    }
+  };
+
+  return (
+    <form onSubmit={send} className="flex gap-2">
+      <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask the coach..." className="flex-1 bg-black/10 rounded-lg p-2 text-sm outline-none" />
+      <button disabled={!text || sending} className="px-3 py-1 bg-[#D6FF5C] text-black rounded-md text-sm font-bold">
+        {sending ? '...' : 'Send'}
+      </button>
+    </form>
+  );
+}
+
 const dummyGraphData = Array.from({ length: 20 }, (_, i) => ({ value: 40 + Math.random() * 40 + (i * 2) }));
 
 export default function LiveMatchPage() {
@@ -24,6 +62,14 @@ export default function LiveMatchPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const prevScoreRef = useRef<string>("");
   const { user, profile } = useAuthStore();
+
+  // keep chat scrolled to top (newest messages prepended)
+  useEffect(() => {
+    try {
+      const el = document.getElementById('live-chat-scroll');
+      if (el) el.scrollTop = 0;
+    } catch (e) {}
+  }, [aiMessages.length]);
 
   useEffect(() => {
     let interval: any;
@@ -144,6 +190,44 @@ export default function LiveMatchPage() {
       console.error('Failed to handle live event', e);
     }
   });
+
+  // Auto-start demo simulator for a smooth "just working" live chat experience.
+  useEffect(() => {
+    // Only attempt to auto-start when we have a match id
+    if (!liveMatchId) return;
+
+    let didStart = false;
+
+    const startDemo = async () => {
+      try {
+        // best-effort start; server will ignore if already running
+        await fetch('/api/demo/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ matchId: liveMatchId })
+        });
+        didStart = true;
+      } catch (e) {
+        console.debug('Demo auto-start failed:', e);
+      }
+    };
+
+    startDemo();
+
+    return () => {
+      // attempt to stop the demo when leaving the page to avoid orphaned simulators
+      if (!didStart) return;
+      try {
+        fetch('/api/demo/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ matchId: liveMatchId })
+        });
+      } catch (e) {
+        // ignore
+      }
+    };
+  }, [liveMatchId]);
 
   // Poll for new prediction every time timeLeft runs out, plus a small delay
   const generateNewPrediction = async () => {
@@ -560,6 +644,31 @@ export default function LiveMatchPage() {
                </p>
              </div>
           )}
+
+          {/* Live Chat Panel */}
+          <div className="glass-panel rounded-xl p-4 border border-white/5">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-bold text-gray-300 uppercase tracking-wider">Live Chat</h4>
+              <span className="text-xs text-gray-400">Realtime</span>
+            </div>
+            <div className="h-48 overflow-y-auto pr-2 mb-3 space-y-2" id="live-chat-scroll">
+              {aiMessages.length === 0 && (
+                <div className="text-xs text-gray-500">No messages yet — waiting for AI insights...</div>
+              )}
+              {aiMessages.map((m, idx) => {
+                const text = m?.text || m?.message || m?.content || (typeof m === 'string' ? m : JSON.stringify(m));
+                const who = m?.role || m?.source || m?.who || 'AI';
+                return (
+                  <div key={idx} className="p-2 rounded-lg bg-black/20 border border-white/5">
+                    <div className="text-[11px] text-gray-400 font-mono mb-1">{who}</div>
+                    <div className="text-sm text-gray-100">{text}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <ChatInput liveMatchId={liveMatchId} onNewMessage={(msg: any) => setAiMessages((s) => [msg, ...s].slice(0, 30))} />
+          </div>
 
         </div>
 

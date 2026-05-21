@@ -5,8 +5,9 @@ import path from "path";
 import http from "http";
 import { createServer as createViteServer } from "vite";
 import { Server as SocketIOServer } from "socket.io";
+import rateLimit from 'express-rate-limit';
 import { GoogleGenAI } from "@google/genai";
-import { generateProactiveMessage, converseOnce } from "./server_ai";
+import { generateProactiveMessage, converseOnce, generateCoachResponse } from "./server_ai";
 
 const cache = {
   matches: { data: null, timestamp: 0 },
@@ -35,6 +36,16 @@ async function startServer() {
     } catch (err) {
       console.error('Webhook handling error', err);
       res.status(500).json({ error: 'webhook error' });
+    }
+  });
+
+  // Health / status endpoint
+  app.get('/api/status', (req, res) => {
+    try {
+      const hasGemini = !!process.env.GEMINI_API_KEY;
+      res.json({ gemini: hasGemini, env: process.env.NODE_ENV || 'development' });
+    } catch (err) {
+      res.status(500).json({ error: 'status error' });
     }
   });
 
@@ -74,7 +85,15 @@ async function startServer() {
   });
 
   // Converse endpoint: run a single prompt through Gemini (or fallback) and optionally broadcast
-  app.post('/api/converse', async (req, res) => {
+  const aiLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 20, // limit each IP to 20 requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many AI requests, slow down.' }
+  });
+
+  app.post('/api/converse', aiLimiter, async (req, res) => {
     try {
       const { prompt, matchId } = req.body || {};
       if (!prompt) return res.status(400).json({ error: 'prompt required' });
@@ -166,7 +185,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/generate_arcade", async (req, res) => {
+  app.post("/api/generate_arcade", aiLimiter, async (req, res) => {
     try {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) throw new Error("GEMINI_API_KEY is missing");
@@ -252,7 +271,7 @@ Return STRICTLY JSON with this exact schema:
     }
   });
 
-  app.post("/api/generate_prediction", async (req, res) => {
+  app.post("/api/generate_prediction", aiLimiter, async (req, res) => {
     try {
       const { matchData, userAccuracy } = req.body;
       const apiKey = process.env.GEMINI_API_KEY;
@@ -321,66 +340,19 @@ Return STRICTLY JSON with this exact schema and no markdown wrappers:
     }
   });
 
-  app.post("/api/coach", async (req, res) => {
+  app.post("/api/coach", aiLimiter, async (req, res) => {
     try {
-      const { message, context } = req.body;
-      
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error("GEMINI_API_KEY is missing");
-      }
-
-      const ai = new GoogleGenAI({ apiKey });
-      const agentModeStr = context?.agentMode || 'Tactical Analyst';
-      const debateMode = context?.debateMode || false;
-      
-      let personality = "You are PredictPlay AI, a highly intelligent sports companion.";
-      if (agentModeStr === 'Casual Fan') {
-         personality = "You are PredictPlay AI acting as a passionate, slightly biased 'Casual Fan'. Use emojis, get hyped about big hits, and talk about the 'vibe' of the match.";
-      } else if (agentModeStr === 'Meme Lord') {
-         personality = "You are PredictPlay AI acting as a 'Meme Lord' cricket fan. Use internet slang, reference popular cricket memes, and be overly dramatic in a funny way.";
-      } else if (agentModeStr === 'Fantasy Guru') {
-         personality = "You are PredictPlay AI acting as a 'Fantasy Cricket Guru'. You obsess over match-ups, player form, points systems, and who to captain/vice-captain.";
-      } else {
-         personality = "You are PredictPlay AI acting as a pragmatic 'Tactical Analyst'. Focus on field placements, bowler variations, pitch conditions, and batsman psychology.";
-      }
-
-      let debatePrompt = debateMode ? " DEBATE MODE IS ON: No matter what the user predicts or says, politely but firmly disagree with them. Argue the opposite side with compelling cricketing logic. Play devil's advocate." : "";
-
-      try {
-        const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: [
-            { role: "user", parts: [{ text: `${personality}${debatePrompt} Context: ${JSON.stringify(context)}. User says: ${message}. Keep your response concise, mostly one paragraph, and heavily adopt the selected persona's tone.` }] }
-          ]
-        });
-
-        res.json({ response: response.text });
-      } catch (geminiError: any) {
-        if (geminiError.status === 429 || geminiError.message?.includes("429")) {
-          console.error("Gemini Coach: Rate limit exceeded, using fallback.");
-        } else {
-          console.error("Gemini Coach Error:", geminiError.message || geminiError);
-        }
-        
-        let fallbackText = "Hmm, let me analyze that... It looks like a tricky situation. Maintaining a strong off-stump line while keeping mid-off up could pressure the batsman into a mistake.";
-        if (agentModeStr === "Casual Fan") {
-          fallbackText = "Bro, big over coming! I can feel it in my bones! 👀🔥";
-        } else if (agentModeStr === "Meme Lord") {
-          fallbackText = "Bruh, scriptwriters working overtime for this match 💀🍿";
-        } else if (agentModeStr === "Fantasy Guru") {
-          fallbackText = "Looking at historical data, this batsman has a 65% boundary rate against spin. Make him your vice-captain.";
-        }
-        
-        res.json({ response: fallbackText });
-      }
+      const { message, context } = req.body || {};
+      const result = await generateCoachResponse(process.env.GEMINI_API_KEY, message || '', context || {});
+      // result: { text, structured }
+      res.json({ response: result.text, structured: result.structured });
     } catch (error: any) {
       console.error(error);
       res.status(500).json({ error: error.message || "Failed to generate AI response" });
     }
   });
 
-  app.post("/api/narrative", async (req, res) => {
+  app.post("/api/narrative", aiLimiter, async (req, res) => {
     try {
       const { matchData } = req.body;
       const apiKey = process.env.GEMINI_API_KEY;

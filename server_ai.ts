@@ -60,3 +60,40 @@ export async function converseOnce(apiKey: string | undefined, promptText: strin
     return { text: 'AI error' };
   }
 }
+
+export async function generateCoachResponse(apiKey: string | undefined, message: string, context: any) {
+  // Return structured coaching response: { text, structured: { explanation, coach_tip, suggested_actions } }
+  if (!apiKey) {
+    // Demo fallback
+    return {
+      text: `(Demo) I examined "${message}" about ${context?.currentMatch || 'the match'}. Key point: focus on field placements and bowler patterns.`,
+      structured: {
+        explanation: 'In demo mode we cannot access live model. Look at bowler lengths and field positions.',
+        coach_tip: 'Watch for short balls to the leg side; adjust by moving mid-wicket inwards.',
+        suggested_actions: ['Study batter weaknesses vs pace', 'Adjust field on 3rd man', 'Switch bowler to left-arm']
+      }
+    };
+  }
+
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const sys = `You are PredictPlay Coach.AI. Provide a concise coaching reply to the user message. Return JSON with keys: text, explanation, coach_tip, suggested_actions.`;
+    const prompt = `${sys}\nUser message: ${message}\nContext: ${JSON.stringify(context || {})}\nReturn JSON only.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: { responseMimeType: 'application/json' }
+    });
+
+    try {
+      const parsed = JSON.parse(response.text || '{}');
+      return { text: parsed.text || response.text, structured: parsed };
+    } catch (e) {
+      return { text: response.text || 'AI returned non-JSON', structured: null };
+    }
+  } catch (err) {
+    console.error('generateCoachResponse error', err);
+    return { text: 'AI error', structured: null };
+  }
+}

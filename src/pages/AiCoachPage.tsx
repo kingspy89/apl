@@ -8,6 +8,7 @@ export default function AiCoachPage() {
   const [selectedAgent, setSelectedAgent] = useState('Tactical Analyst');
   const [debateMode, setDebateMode] = useState(false);
   const [currentLiveMatch, setCurrentLiveMatch] = useState('Loading live matches...');
+  const [geminiEnabled, setGeminiEnabled] = useState<boolean | null>(null);
   const [messages, setMessages] = useState([
     { role: 'assistant', content: 'Hey there. I am your AI Cricket Brain. I can analyze match momentum, debate your predictions, or simulate "what if" scenarios. What would you like to know?' }
   ]);
@@ -15,18 +16,30 @@ export default function AiCoachPage() {
   const agents = ['Tactical Analyst', 'Casual Fan', 'Meme Lord', 'Fantasy Guru'];
 
   React.useEffect(() => {
-    fetch('/api/matches')
-      .then(r => r.json())
-      .then(data => {
-         if (data.data && data.data.length > 0) {
-            const live = data.data.find((m: any) => m.matchStarted && !m.matchEnded);
-            if (live) setCurrentLiveMatch(live.name);
-            else setCurrentLiveMatch(data.data[0].name);
-         } else {
-            setCurrentLiveMatch('No active matches');
-         }
-      })
-      .catch(() => setCurrentLiveMatch('Match data unavailable'));
+    // fetch match list and gemini status in parallel
+    Promise.all([
+      fetch('/api/matches').then(r => r.json()).catch(() => null),
+      fetch('/api/status').then(r => r.json()).catch(() => null)
+    ]).then(([matchesData, statusData]) => {
+      try {
+        if (matchesData && matchesData.data && matchesData.data.length > 0) {
+          const live = matchesData.data.find((m: any) => m.matchStarted && !m.matchEnded);
+          if (live) setCurrentLiveMatch(live.name);
+          else setCurrentLiveMatch(matchesData.data[0].name);
+        } else {
+          setCurrentLiveMatch('No active matches');
+        }
+      } catch (e) {
+        setCurrentLiveMatch('Match data unavailable');
+      }
+
+      try {
+        if (statusData && typeof statusData.gemini !== 'undefined') setGeminiEnabled(!!statusData.gemini);
+        else setGeminiEnabled(false);
+      } catch (e) {
+        setGeminiEnabled(false);
+      }
+    });
   }, []);
 
   const handleSend = async (e?: React.FormEvent, predefinedMessage?: string) => {
@@ -45,10 +58,22 @@ export default function AiCoachPage() {
          body: JSON.stringify({ message: userMessage, context: { currentMatch: currentLiveMatch, userAccuracy: "Unknown", agentMode: selectedAgent, debateMode } })
       });
       const data = await res.json();
-      
+      // Prefer structured response when available
+      let assistantText = data.response || "Sorry, I couldn't process that. Could you rephrase?";
+      if (data.structured) {
+        const s = data.structured;
+        // Compose a friendly assistant message combining fields
+        const parts = [];
+        if (s.text) parts.push(s.text);
+        if (s.explanation) parts.push(`Explanation: ${s.explanation}`);
+        if (s.coach_tip) parts.push(`Coach Tip: ${s.coach_tip}`);
+        if (s.suggested_actions) parts.push(`Suggested: ${Array.isArray(s.suggested_actions) ? s.suggested_actions.join('; ') : s.suggested_actions}`);
+        assistantText = parts.join('\n\n');
+      }
+
       setMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: data.response || "Sorry, I couldn't process that. Could you rephrase?"
+        content: assistantText
       }]);
     } catch (err) {
       console.error(err);
@@ -72,9 +97,14 @@ export default function AiCoachPage() {
             </div>
             <div>
               <h2 className="font-display font-black text-xl uppercase tracking-tight">Coach.AI</h2>
-              <div className="flex items-center gap-1.5 text-xs font-mono text-[#A4EBC5] tracking-widest uppercase">
-                <div className="w-2 h-2 rounded-full bg-[#D6FF5C] animate-pulse"></div>
-                Active Analysis
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5 text-xs font-mono text-[#A4EBC5] tracking-widest uppercase">
+                  <div className="w-2 h-2 rounded-full bg-[#D6FF5C] animate-pulse"></div>
+                  Active Analysis
+                </div>
+                <div className="text-xs font-mono uppercase tracking-widest">
+                  <span className={`px-2 py-1 rounded-md ${geminiEnabled ? 'bg-green-600 text-white' : 'bg-gray-600 text-white'}`}>{geminiEnabled ? 'Gemini: Enabled' : 'Demo Mode'}</span>
+                </div>
               </div>
             </div>
           </div>
