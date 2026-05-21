@@ -1,7 +1,5 @@
 <div align="center">
 
-<img width="100%" alt="PredictPlay Banner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-
 # ⚡ PredictPlay AI
 
 ### The First AI That Watches Live Sports With You
