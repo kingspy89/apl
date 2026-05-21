@@ -1,0 +1,37 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Validation Helpers
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+
+    // User Profile Validation
+    function isValidUser(data, id) {
+      return data.keys().hasAll(['email', 'joinedAt']) &&
+             data.email is string && data.email.size() <= 200 &&
+             data.joinedAt is string && data.joinedAt.size() <= 100 &&
+             (!('displayName' in data) || (data.displayName == null || (data.displayName is string && data.displayName.size() <= 100))) &&
+             (!('photoURL' in data) || (data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 2048))) &&
+             (!('xp' in data) || data.xp is number) &&
+             (!('level' in data) || data.level is number) &&
+             (!('accuracy' in data) || data.accuracy is number) &&
+             (!('streak' in data) || data.streak is number) &&
+             (!('favoriteIplTeam' in data) || (data.favoriteIplTeam == null || (data.favoriteIplTeam is string && data.favoriteIplTeam.size() <= 100))) &&
+             (!('badges' in data) || (data.badges is list && data.badges.size() <= 100));
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId);
+      allow create: if isSignedIn() && request.auth.uid == userId && isValidId(userId) && isValidUser(incoming(), userId) && incoming().email == request.auth.token.email && request.auth.token.email_verified == true;
+      allow update: if isSignedIn() && request.auth.uid == userId && isValidId(userId) && isValidUser(incoming(), userId) && incoming().email == existing().email && incoming().joinedAt == existing().joinedAt;
+    }
+  }
+}

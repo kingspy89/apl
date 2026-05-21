@@ -1,0 +1,28 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user profile",
+      "type": "object",
+      "properties": {
+        "displayName": { "$ref": "string" },
+        "email": { "$ref": "string" },
+        "photoURL": { "$ref": "string" },
+        "xp": { "$ref": "number" },
+        "level": { "$ref": "number" },
+        "badges": { "$ref": "list" },
+        "accuracy": { "$ref": "number" },
+        "streak": { "$ref": "number" },
+        "joinedAt": { "$ref": "string" },
+        "favoriteIplTeam": { "$ref": "string" }
+      },
+      "required": ["email", "joinedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    }
+  }
+}
